@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My Tractors – TractorBazaar</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <a href="/">🚜 TractorBazaar</a>
+      <span><span id="who"></span> · <button class="btn btn-light" onclick="logout()">Log out</button></span>
+    </div>
+  </header>
+  <main class="wrap layout">
+    <form class="card" id="form">
+      <h2>Post your tractor</h2>
+      <div class="error" id="error"></div>
+      <div class="row">
+        <label>Brand <input name="brand" placeholder="e.g. Mahindra" required></label>
+        <label>Model <input name="model" placeholder="e.g. 575 DI" required></label>
+      </div>
+      <div class="row">
+        <label>Year <input name="year" type="number" min="1970" required></label>
+        <label>Hours used <input name="hoursUsed" type="number" min="0"></label>
+      </div>
+      <div class="row">
+        <label>Expected price (₹) <input name="expectedPrice" type="number" min="0" step="1000"></label>
+        <label>Village / District <input name="location" required></label>
+      </div>
+      <label>Description <textarea name="description" rows="3" placeholder="Condition, documents, reason for selling…"></textarea></label>
+      <label>Photos (up to 8) <input name="photos" id="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple required></label>
+      <div class="previews" id="previews"></div>
+      <button class="btn btn-primary btn-block" id="submit">Post tractor</button>
+    </form>
+
+    <section>
+      <h2>My posted tractors</h2>
+      <div class="grid" id="list"></div>
+    </section>
+  </main>
+  <div id="lightbox"><img alt=""></div>
+
+  <script src="/common.js"></script>
+  <script>
+    const list = document.getElementById('list');
+    const errorBox = document.getElementById('error');
+
+    async function load() {
+      const { tractors } = await api('/api/tractors/mine');
+      list.innerHTML = tractors.length
+        ? tractors.map((t) => tractorCard(t, { showDelete: true })).join('')
+        : '<p class="muted">You have not posted any tractor yet.</p>';
+    }
+
+    document.getElementById('photos').addEventListener('change', (e) => {
+      const files = [...e.target.files];
+      errorBox.textContent = files.length > 8 ? 'You can upload at most 8 photos' : '';
+      document.getElementById('previews').innerHTML = files
+        .map((f) => `<img src="${URL.createObjectURL(f)}" alt="">`).join('');
+    });
+
+    document.getElementById('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const button = document.getElementById('submit');
+      button.disabled = true;
+      button.textContent = 'Uploading…';
+      errorBox.textContent = '';
+      try {
+        await api('/api/tractors', { method: 'POST', body: new FormData(e.target) });
+        e.target.reset();
+        document.getElementById('previews').innerHTML = '';
+        await load();
+      } catch (err) {
+        errorBox.textContent = err.message;
+      } finally {
+        button.disabled = false;
+        button.textContent = 'Post tractor';
+      }
+    });
+
+    list.addEventListener('click', async (e) => {
+      const id = e.target.dataset.delete;
+      if (!id || !confirm('Delete this post?')) return;
+      await api(`/api/tractors/${id}`, { method: 'DELETE' });
+      await load();
+    });
+
+    requireLogin('customer').then((user) => {
+      document.getElementById('who').textContent = `Customer: ${user.name}`;
+      document.querySelector('[name=year]').max = new Date().getFullYear();
+      load();
+    });
+  </script>
+</body>
+</html>

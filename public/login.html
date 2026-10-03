@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Login – TractorBazaar</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header><div class="wrap"><a href="/">🚜 TractorBazaar</a></div></header>
+  <main class="wrap narrow">
+    <form class="card" id="form">
+      <h2 id="title">Login</h2>
+      <div class="error" id="error"></div>
+      <label>Mobile number <input name="phone" inputmode="numeric" maxlength="10" required autofocus></label>
+      <label>Password <input name="password" type="password" required></label>
+      <button class="btn btn-primary btn-block">Log in</button>
+      <p class="muted">New here? <a id="signup" href="#">Create an account</a></p>
+      <p class="muted"><a id="other" href="#"></a></p>
+    </form>
+  </main>
+  <script src="/common.js"></script>
+  <script>
+    const role = new URLSearchParams(location.search).get('role') === 'broker' ? 'broker' : 'customer';
+    const other = role === 'broker' ? 'customer' : 'broker';
+    document.getElementById('title').textContent = role === 'broker' ? 'Broker Login' : 'Customer Login';
+    document.getElementById('signup').href = `/register?role=${role}`;
+    document.getElementById('other').href = `/login?role=${other}`;
+    document.getElementById('other').textContent = `Are you a ${other}? Log in here`;
+
+    document.getElementById('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      try {
+        await postJson('/api/auth/login', { phone: f.get('phone'), password: f.get('password'), role });
+        location.href = `/${role}`;
+      } catch (err) {
+        document.getElementById('error').textContent = err.message;
+      }
+    });
+  </script>
+</body>
+</html>

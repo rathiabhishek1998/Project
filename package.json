@@ -5,14 +5,16 @@
   "description": "Simple second-hand tractor marketplace: customers post tractors with photos, brokers browse them",
   "type": "module",
   "scripts": {
-    "start": "node --disable-warning=ExperimentalWarning src/index.js",
-    "dev": "node --disable-warning=ExperimentalWarning --watch src/index.js",
-    "test": "node --disable-warning=ExperimentalWarning --test \"test/*.test.js\""
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test \"test/*.test.js\""
   },
   "engines": {
-    "node": ">=22.13"
+    "node": "22.x"
   },
   "dependencies": {
+    "@libsql/client": "^0.18.0",
+    "@vercel/blob": "^2.8.0",
     "bcryptjs": "^3.0.2",
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",

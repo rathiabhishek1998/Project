@@ -3,6 +3,7 @@
 async function api(path, options = {}) {
   const res = await fetch(path, { credentials: 'same-origin', ...options });
   if (res.status === 204) return null;
+  if (res.status === 413) throw new Error('The photos are too large to upload. Try fewer or smaller photos.');
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Something went wrong');
   return data;

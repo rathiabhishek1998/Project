@@ -155,6 +155,25 @@
 
     document.getElementById('cancel').addEventListener('click', resetForm);
 
+    // Phone photos are several MB each. Shrink them so all angles fit in one upload
+    // (the server accepts at most 4.5 MB per request) and upload quickly on mobile data.
+    async function shrinkPhoto(file, maxSide = 1400) {
+      try {
+        const bitmap = await createImageBitmap(file);
+        const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(bitmap.width * scale);
+        canvas.height = Math.round(bitmap.height * scale);
+        canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        bitmap.close();
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+        if (blob && blob.size < file.size) return new File([blob], 'photo.jpg', { type: 'image/jpeg' });
+      } catch {
+        // Browser couldn't read the image here; send it as it is.
+      }
+      return file;
+    }
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!renderPhotos()) {
@@ -166,7 +185,11 @@
       submitButton.textContent = 'Uploading…';
       errorBox.textContent = '';
       const body = new FormData(form);
-      for (const [name, value] of [...body]) if (value instanceof File && !value.name) body.delete(name); // empty slots
+      for (const [name, value] of [...body]) {
+        if (!(value instanceof File)) continue;
+        if (value.name) body.set(name, await shrinkPhoto(value));
+        else body.delete(name); // empty slot
+      }
       try {
         if (editing) {
           body.set('removePhotoIds', [...removed].join(','));

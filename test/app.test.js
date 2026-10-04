@@ -6,6 +6,7 @@ import path from 'node:path';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { createDb } from '../src/db.js';
+import { diskStorage } from '../src/storage.js';
 
 // Smallest valid PNG (1x1 pixel).
 const PNG = Buffer.from(
@@ -13,9 +14,13 @@ const PNG = Buffer.from(
   'base64',
 );
 
-function setup() {
+async function setup() {
   const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tractor-test-'));
-  const app = createApp({ db: createDb(), config: { jwtSecret: 'test', secureCookies: false, uploadDir } });
+  const app = createApp({
+    db: await createDb(),
+    config: { jwtSecret: 'test', secureCookies: false },
+    storage: diskStorage(uploadDir),
+  });
   return { app, uploadDir };
 }
 
@@ -41,7 +46,7 @@ const postTractor = (agent, fields = {}, photos = 1) =>
 const editTractor = (agent, id, fields = {}, angles = []) => tractorForm(agent.put(`/api/tractors/${id}`), fields, angles);
 
 test('customer and broker logins are separate', async () => {
-  const { app } = setup();
+  const { app } = await setup();
   await signup(app, 'customer', '9876543210');
   await request(app).post('/api/auth/login').send({ phone: '9876543210', password: 'secret123', role: 'broker' }).expect(401);
   const ok = await request(app).post('/api/auth/login').send({ phone: '9876543210', password: 'secret123', role: 'customer' }).expect(200);
@@ -54,7 +59,7 @@ test('customer and broker logins are separate', async () => {
 });
 
 test('register validates input', async () => {
-  const { app } = setup();
+  const { app } = await setup();
   const base = { name: 'A', phone: '9876543210', password: 'secret123', role: 'customer' };
   await request(app).post('/api/auth/register').send({ ...base, phone: '123' }).expect(400);
   await request(app).post('/api/auth/register').send({ ...base, password: '1' }).expect(400);
@@ -62,7 +67,7 @@ test('register validates input', async () => {
 });
 
 test('customer posts a tractor with photos; broker sees it with photos and contact', async () => {
-  const { app } = setup();
+  const { app } = await setup();
   const customer = await signup(app, 'customer', '9876543210');
   const broker = await signup(app, 'broker', '9123456789');
 
@@ -90,7 +95,7 @@ test('customer posts a tractor with photos; broker sees it with photos and conta
 });
 
 test('access rules for listings and photos', async () => {
-  const { app } = setup();
+  const { app } = await setup();
   const customer = await signup(app, 'customer', '9876543210');
   const other = await signup(app, 'customer', '9876543211');
   const broker = await signup(app, 'broker', '9123456789');
@@ -111,7 +116,7 @@ test('access rules for listings and photos', async () => {
 });
 
 test('customer edits details and replaces or removes photos per angle', async () => {
-  const { app, uploadDir } = setup();
+  const { app, uploadDir } = await setup();
   const customer = await signup(app, 'customer', '9876543210');
   const { body } = await postTractor(customer, {}, ['front', 'rear', 'left']).expect(201);
   const { id, photos } = body.tractor;
@@ -139,7 +144,7 @@ test('customer edits details and replaces or removes photos per angle', async ()
 });
 
 test('edit validates input, keeps at least one photo, and cleans up files on failure', async () => {
-  const { app, uploadDir } = setup();
+  const { app, uploadDir } = await setup();
   const customer = await signup(app, 'customer', '9876543210');
   const { body } = await postTractor(customer, {}, 2).expect(201);
   const { id, photos } = body.tractor;
@@ -157,7 +162,7 @@ test('edit validates input, keeps at least one photo, and cleans up files on fai
 });
 
 test('post requires photos and valid fields, and cleans up files on failure', async () => {
-  const { app, uploadDir } = setup();
+  const { app, uploadDir } = await setup();
   const customer = await signup(app, 'customer', '9876543210');
   await postTractor(customer, {}, 0).expect(400);
   await postTractor(customer, { year: '1800' }, 2).expect(400);
@@ -170,7 +175,7 @@ test('post requires photos and valid fields, and cleans up files on failure', as
 });
 
 test('deleting a post removes its photos', async () => {
-  const { app, uploadDir } = setup();
+  const { app, uploadDir } = await setup();
   const customer = await signup(app, 'customer', '9876543210');
   const { body } = await postTractor(customer, {}, 2).expect(201);
   assert.equal(fs.readdirSync(uploadDir).length, 2);
@@ -180,7 +185,7 @@ test('deleting a post removes its photos', async () => {
 });
 
 test('logout clears the session', async () => {
-  const { app } = setup();
+  const { app } = await setup();
   const customer = await signup(app, 'customer', '9876543210');
   await customer.get('/api/auth/me').expect(200);
   await customer.post('/api/auth/logout').expect(204);

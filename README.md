@@ -9,12 +9,12 @@ A simple marketplace for second-hand tractors. **Customers** post their tractor 
 - Customers see, edit and delete their own posts. Editing can change any detail and replace or remove the photo for any angle
 - Brokers see all customer posts with photos and the customer's name and phone, plus search by brand, model or location
 - Photos are private: only brokers and the customer who uploaded them can view them
-- Data is stored in SQLite (Node's built-in `node:sqlite`) and photos in the `uploads/` folder
+- Data is stored in SQLite: a local file on your computer, or a hosted [Turso](https://turso.tech) database on Vercel. Photos go in the `uploads/` folder locally, or a private Vercel Blob store on Vercel
 
 ## Tech
 
-- Node.js 22.13+ with Express 5
-- SQLite via `node:sqlite`, so there is no database server to install
+- Node.js 22 with Express 5
+- SQLite via `@libsql/client` (local file or Turso), so there is no database server to install
 - Plain HTML, CSS and JavaScript in `public/`, so there is no frontend build step
 - Logins use a JWT in an httpOnly cookie and passwords are hashed with bcrypt
 
@@ -34,18 +34,36 @@ Open http://localhost:3000, pick **Customer** or **Broker**, and sign up.
 | Variable     | Default           | Notes                              |
 |--------------|-------------------|------------------------------------|
 | `PORT`       | `3000`            |                                    |
-| `DB_PATH`    | `./tractors.db`   | SQLite file, created automatically |
-| `UPLOAD_DIR` | `./uploads`       | Where photos are stored            |
+| `DB_PATH`    | `./tractors.db`   | SQLite file, created automatically (ignored when `TURSO_DATABASE_URL` is set) |
+| `UPLOAD_DIR` | `./uploads`       | Where photos are stored (ignored when `BLOB_READ_WRITE_TOKEN` is set) |
 | `JWT_SECRET` | dev-only value    | **Required** when `NODE_ENV=production` |
+| `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | – | Use a Turso database instead of the local file. **Required** on Vercel |
+| `BLOB_READ_WRITE_TOKEN` | – | Store photos in Vercel Blob instead of `uploads/`. **Required** on Vercel |
+
+## Deploy on Vercel
+
+On Vercel there is no `npm start`: `api/index.js` runs the Express app as a serverless function, and `vercel.json` serves `public/` as static pages and sends `/api/*` and `/uploads/*` to that function. Vercel servers keep no files between requests, so the database and photos must live in hosted storage:
+
+1. Import the GitHub repo in Vercel (no build command needed; `vercel.json` sets everything).
+2. **Storage → Create → Blob**: choose **Private** access and connect it to the project. This adds `BLOB_READ_WRITE_TOKEN`.
+3. **Storage → Marketplace → Turso** (or create a database at turso.tech): connect it to the project. This should add `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`; if you created the database on turso.tech, add those two yourself under Settings → Environment Variables.
+4. **Settings → Environment Variables**: add `JWT_SECRET` set to any long random text.
+5. Redeploy (Deployments → ⋯ → Redeploy). The tables are created automatically on the first request.
+
+Vercel accepts at most 4.5 MB per request, so the customer page shrinks photos in the browser (to about 1400 px) before uploading.
 
 ## Project layout
 
 ```
+api/
+  index.js    Vercel entry point
 src/
-  index.js    server start-up and config
+  index.js    local server start-up (npm start)
+  setup.js    builds the app from environment variables
+  storage.js  photo storage: local folder or Vercel Blob
   app.js      routes: auth, tractors, photo serving
   auth.js     cookie/JWT helpers and role checks
-  db.js       SQLite schema (users, tractors, photos)
+  db.js       database connection and schema (users, tractors, photos)
 public/
   index.html      landing page (choose customer or broker)
   login.html      login (?role=customer | ?role=broker)
@@ -54,6 +72,7 @@ public/
   broker.html     all customer posts with photos
   common.js, style.css
 test/app.test.js
+vercel.json
 ```
 
 ## API

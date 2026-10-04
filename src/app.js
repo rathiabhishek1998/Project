@@ -2,7 +2,6 @@ import express from 'express';
 import multer from 'multer';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
-import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { attachUser, COOKIE, requireRole, setAuthCookie } from './auth.js';
@@ -51,41 +50,53 @@ function readDetails(body) {
   };
 }
 
-/** The photos multer saved for this request, as [{ angle, file }]. */
+/** The photos in this request, as [{ angle, filename, file }]; file.buffer holds the image. */
 const uploadedPhotos = (req) =>
-  Object.entries(req.files ?? {}).map(([field, [file]]) => ({ angle: field.slice('photo_'.length), file }));
+  Object.entries(req.files ?? {}).map(([field, [file]]) => ({
+    angle: field.slice('photo_'.length),
+    filename: `${crypto.randomUUID()}${IMAGE_TYPES[file.mimetype]}`,
+    file,
+  }));
 
 const publicUser = (u) => ({ id: u.id, name: u.name, phone: u.phone, role: u.role });
 
-export function createApp({ db, config }) {
+/**
+ * db: a libsql client (see db.js). storage: where photos live (see storage.js).
+ */
+export function createApp({ db, config, storage }) {
   const app = express();
-  fs.mkdirSync(config.uploadDir, { recursive: true });
 
+  const one = async (sql, ...args) => (await db.execute({ sql, args })).rows[0];
+  const all = async (sql, ...args) => (await db.execute({ sql, args })).rows;
+
+  // Photos are held in memory until validated, then written to storage.
   const upload = multer({
-    storage: multer.diskStorage({
-      destination: config.uploadDir,
-      filename: (_req, file, cb) => cb(null, `${crypto.randomUUID()}${IMAGE_TYPES[file.mimetype]}`),
-    }),
+    storage: multer.memoryStorage(),
     limits: { fileSize: 5 * 1024 * 1024, files: PHOTO_ANGLES.length },
     fileFilter: (_req, file, cb) =>
       IMAGE_TYPES[file.mimetype] ? cb(null, true) : cb(new BadRequest('Photos must be JPG, PNG or WEBP')),
   });
   const uploadPhotos = upload.fields(PHOTO_ANGLES.map((angle) => ({ name: `photo_${angle}`, maxCount: 1 })));
 
-  // Wraps an upload handler so a failed request leaves no half-written rows or orphaned files.
-  const cleanupOnError = (handler) => (req, res) => {
+  const removeQuietly = (filenames) =>
+    storage.remove(filenames).catch((err) => console.error('Could not remove photos', filenames, err));
+
+  // Saves the photos, then runs the database writes. If anything fails, the saved photos are removed again.
+  async function savePhotosThen(photos, writeDb) {
+    const saves = await Promise.allSettled(photos.map((p) => storage.save(p.filename, p.file.buffer, p.file.mimetype)));
     try {
-      handler(req, res);
+      const failed = saves.find((s) => s.status === 'rejected');
+      if (failed) throw failed.reason;
+      return await writeDb();
     } catch (err) {
-      if (db.isTransaction) db.exec('ROLLBACK');
-      for (const { file } of uploadedPhotos(req)) fs.rmSync(file.path, { force: true });
+      await removeQuietly(photos.map((p) => p.filename));
       throw err;
     }
-  };
+  }
 
   // Loads the tractor in :id into req.tractor, if it belongs to the logged-in customer.
-  const ownTractor = (req, _res, next) => {
-    const tractor = db.prepare('SELECT * FROM tractors WHERE id = ?').get(Number(req.params.id));
+  const ownTractor = async (req, _res, next) => {
+    const tractor = await one('SELECT * FROM tractors WHERE id = ?', Number(req.params.id));
     if (!tractor) throw new HttpError(404, 'Not found');
     if (tractor.customer_id !== req.user.id) throw new HttpError(403, 'Not your post');
     req.tractor = tractor;
@@ -97,27 +108,27 @@ export function createApp({ db, config }) {
 
   // ---------- Auth (customers and brokers have separate accounts and logins) ----------
 
-  app.post('/api/auth/register', (req, res) => {
+  app.post('/api/auth/register', async (req, res) => {
     const { name, phone, password, role } = req.body ?? {};
     if (!['customer', 'broker'].includes(role)) throw new BadRequest('Role must be customer or broker');
     if (!name?.trim()) throw new BadRequest('Name is required');
     if (!PHONE_RE.test(phone ?? '')) throw new BadRequest('Enter a valid 10-digit mobile number');
     if (!password || password.length < 6) throw new BadRequest('Password must be at least 6 characters');
-    if (db.prepare('SELECT 1 FROM users WHERE phone = ? AND role = ?').get(phone, role)) {
+    if (await one('SELECT 1 FROM users WHERE phone = ? AND role = ?', phone, role)) {
       return res.status(409).json({ error: `A ${role} account with this number already exists` });
     }
-    const { lastInsertRowid } = db
-      .prepare('INSERT INTO users (name, phone, password_hash, role) VALUES (?, ?, ?, ?)')
-      .run(name.trim(), phone, bcrypt.hashSync(password, 10), role);
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(lastInsertRowid);
+    const user = await one(
+      'INSERT INTO users (name, phone, password_hash, role) VALUES (?, ?, ?, ?) RETURNING *',
+      name.trim(), phone, await bcrypt.hash(password, 10), role,
+    );
     setAuthCookie(res, user, config);
     res.status(201).json({ user: publicUser(user) });
   });
 
-  app.post('/api/auth/login', (req, res) => {
+  app.post('/api/auth/login', async (req, res) => {
     const { phone, password, role } = req.body ?? {};
-    const user = db.prepare('SELECT * FROM users WHERE phone = ? AND role = ?').get(phone ?? '', role ?? '');
-    if (!user || !bcrypt.compareSync(password ?? '', user.password_hash)) {
+    const user = await one('SELECT * FROM users WHERE phone = ? AND role = ?', phone ?? '', role ?? '');
+    if (!user || !(await bcrypt.compare(password ?? '', user.password_hash))) {
       return res.status(401).json({ error: 'Incorrect mobile number or password' });
     }
     setAuthCookie(res, user, config);
@@ -129,8 +140,8 @@ export function createApp({ db, config }) {
     res.status(204).end();
   });
 
-  app.get('/api/auth/me', (req, res) => {
-    const user = req.user && db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  app.get('/api/auth/me', async (req, res) => {
+    const user = req.user && (await one('SELECT * FROM users WHERE id = ?', req.user.id));
     if (!user) return res.status(401).json({ error: 'Not logged in' });
     res.json({ user: publicUser(user) });
   });
@@ -159,94 +170,102 @@ export function createApp({ db, config }) {
       .sort((a, b) => angleOrder(a.angle) - angleOrder(b.angle)),
   });
 
-  const addPhoto = (tractorId, { angle, file }) =>
-    db.prepare('INSERT INTO photos (tractor_id, filename, angle) VALUES (?, ?, ?)').run(tractorId, file.filename, angle);
-
-  const getTractor = (id) => serialize(db.prepare(`${TRACTOR_SELECT} WHERE t.id = ?`).get(id));
+  const getTractor = async (id) => serialize(await one(`${TRACTOR_SELECT} WHERE t.id = ?`, id));
 
   // Customer posts a tractor with photos (multipart form, one field per angle: "photo_front", "photo_rear", ...).
-  app.post('/api/tractors', requireRole('customer'), uploadPhotos, cleanupOnError((req, res) => {
+  app.post('/api/tractors', requireRole('customer'), uploadPhotos, async (req, res) => {
     const d = readDetails(req.body);
     const photos = uploadedPhotos(req);
     if (!photos.length) throw new BadRequest('Add at least one photo of the tractor');
 
-    db.exec('BEGIN');
-    const { lastInsertRowid: id } = db
-      .prepare(`INSERT INTO tractors (customer_id, brand, model, year, hours_used, expected_price, location, description)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(req.user.id, d.brand, d.model, d.year, d.hoursUsed, d.expectedPrice, d.location, d.description);
-    for (const p of photos) addPhoto(id, p);
-    db.exec('COMMIT');
+    const [{ lastInsertRowid }] = await savePhotosThen(photos, () => db.batch([
+      {
+        sql: `INSERT INTO tractors (customer_id, brand, model, year, hours_used, expected_price, location, description)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [req.user.id, d.brand, d.model, d.year, d.hoursUsed, d.expectedPrice, d.location, d.description],
+      },
+      // The batch is one write transaction, so this customer's newest tractor is the one just inserted.
+      ...photos.map((p) => ({
+        sql: 'INSERT INTO photos (tractor_id, filename, angle) SELECT max(id), ?, ? FROM tractors WHERE customer_id = ?',
+        args: [p.filename, p.angle, req.user.id],
+      })),
+    ], 'write'));
 
-    res.status(201).json({ tractor: getTractor(id) });
-  }));
+    res.status(201).json({ tractor: await getTractor(Number(lastInsertRowid)) });
+  });
 
   // Customer edits their post. Same form as posting; photos are optional here:
   // a photo sent for an angle replaces the one already there, and "removePhotoIds"
   // (comma-separated) deletes photos without replacing them.
-  app.put('/api/tractors/:id', requireRole('customer'), ownTractor, uploadPhotos, cleanupOnError((req, res) => {
+  app.put('/api/tractors/:id', requireRole('customer'), ownTractor, uploadPhotos, async (req, res) => {
     const { id } = req.tractor;
     const d = readDetails(req.body);
     const photos = uploadedPhotos(req);
     const removeIds = new Set(String(req.body.removePhotoIds ?? '').split(',').filter(Boolean).map(Number));
     const replacedAngles = new Set(photos.map((p) => p.angle));
-    const existing = db.prepare('SELECT * FROM photos WHERE tractor_id = ?').all(id);
+    const existing = await all('SELECT * FROM photos WHERE tractor_id = ?', id);
     const dropped = existing.filter((p) => removeIds.has(p.id) || replacedAngles.has(p.angle));
     if (existing.length - dropped.length + photos.length === 0) {
       throw new BadRequest('Keep at least one photo of the tractor');
     }
 
-    db.exec('BEGIN');
-    db.prepare(`UPDATE tractors SET brand = ?, model = ?, year = ?, hours_used = ?, expected_price = ?, location = ?, description = ?
-                WHERE id = ?`)
-      .run(d.brand, d.model, d.year, d.hoursUsed, d.expectedPrice, d.location, d.description, id);
-    const deletePhoto = db.prepare('DELETE FROM photos WHERE id = ?');
-    for (const p of dropped) deletePhoto.run(p.id);
-    for (const p of photos) addPhoto(id, p);
-    db.exec('COMMIT');
+    await savePhotosThen(photos, () => db.batch([
+      {
+        sql: `UPDATE tractors SET brand = ?, model = ?, year = ?, hours_used = ?, expected_price = ?, location = ?, description = ?
+              WHERE id = ?`,
+        args: [d.brand, d.model, d.year, d.hoursUsed, d.expectedPrice, d.location, d.description, id],
+      },
+      ...dropped.map((p) => ({ sql: 'DELETE FROM photos WHERE id = ?', args: [p.id] })),
+      ...photos.map((p) => ({ sql: 'INSERT INTO photos (tractor_id, filename, angle) VALUES (?, ?, ?)', args: [id, p.filename, p.angle] })),
+    ], 'write'));
 
-    for (const p of dropped) fs.rmSync(path.join(config.uploadDir, p.filename), { force: true });
-    res.json({ tractor: getTractor(id) });
-  }));
+    await removeQuietly(dropped.map((p) => p.filename));
+    res.json({ tractor: await getTractor(id) });
+  });
 
   // Customer: their own posts.
-  app.get('/api/tractors/mine', requireRole('customer'), (req, res) => {
-    const rows = db.prepare(`${TRACTOR_SELECT} WHERE t.customer_id = ? ORDER BY t.id DESC`).all(req.user.id);
+  app.get('/api/tractors/mine', requireRole('customer'), async (req, res) => {
+    const rows = await all(`${TRACTOR_SELECT} WHERE t.customer_id = ? ORDER BY t.id DESC`, req.user.id);
     res.json({ tractors: rows.map(serialize) });
   });
 
   // Broker: every customer post, newest first, with optional text search.
-  app.get('/api/tractors', requireRole('broker'), (req, res) => {
+  app.get('/api/tractors', requireRole('broker'), async (req, res) => {
     const q = String(req.query.q ?? '').trim();
     const rows = q
-      ? db.prepare(`${TRACTOR_SELECT} WHERE t.brand LIKE ?1 OR t.model LIKE ?1 OR t.location LIKE ?1 ORDER BY t.id DESC`)
-        .all(`%${q}%`)
-      : db.prepare(`${TRACTOR_SELECT} ORDER BY t.id DESC`).all();
+      ? await all(`${TRACTOR_SELECT} WHERE t.brand LIKE ?1 OR t.model LIKE ?1 OR t.location LIKE ?1 ORDER BY t.id DESC`, `%${q}%`)
+      : await all(`${TRACTOR_SELECT} ORDER BY t.id DESC`);
     res.json({ tractors: rows.map(serialize) });
   });
 
-  app.delete('/api/tractors/:id', requireRole('customer'), ownTractor, (req, res) => {
-    const { tractor } = req;
-    const files = db.prepare('SELECT filename FROM photos WHERE tractor_id = ?').all(tractor.id);
-    db.prepare('DELETE FROM tractors WHERE id = ?').run(tractor.id);
-    for (const { filename } of files) fs.rmSync(path.join(config.uploadDir, filename), { force: true });
+  app.delete('/api/tractors/:id', requireRole('customer'), ownTractor, async (req, res) => {
+    const { id } = req.tractor;
+    const files = await all('SELECT filename FROM photos WHERE tractor_id = ?', id);
+    await db.batch([
+      { sql: 'DELETE FROM photos WHERE tractor_id = ?', args: [id] },
+      { sql: 'DELETE FROM tractors WHERE id = ?', args: [id] },
+    ], 'write');
+    await removeQuietly(files.map((f) => f.filename));
     res.status(204).end();
   });
 
   // Photos are only visible to brokers and to the customer who posted them.
-  app.get('/uploads/:file', (req, res) => {
+  app.get('/uploads/:file', async (req, res) => {
     if (!req.user) return res.status(401).end();
-    const photo = db
-      .prepare('SELECT t.customer_id FROM photos p JOIN tractors t ON t.id = p.tractor_id WHERE p.filename = ?')
-      .get(req.params.file);
+    const photo = await one(
+      'SELECT t.customer_id FROM photos p JOIN tractors t ON t.id = p.tractor_id WHERE p.filename = ?',
+      req.params.file,
+    );
     if (!photo) return res.status(404).end();
     if (req.user.role !== 'broker' && photo.customer_id !== req.user.id) return res.status(403).end();
-    res.sendFile(path.join(config.uploadDir, path.basename(req.params.file)));
+    await storage.send(res, req.params.file);
   });
 
+  // Locally the app serves the pages too; on Vercel they are served as static files before reaching here.
   app.use(express.static(PUBLIC_DIR, { extensions: ['html'] }));
 
-  app.use((err, _req, res, _next) => {
+  app.use((err, _req, res, next) => {
+    if (res.headersSent) return next(err);
     if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
     if (err.name === 'MulterError') {
       const message = err.code === 'LIMIT_UNEXPECTED_FILE' ? 'Add only one photo for each angle' : err.message;

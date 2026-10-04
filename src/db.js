@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite';
+import { createClient } from '@libsql/client';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
@@ -32,12 +32,14 @@ CREATE TABLE IF NOT EXISTS photos (
 );
 `;
 
-export function createDb(path = ':memory:') {
-  const db = new DatabaseSync(path);
-  db.exec('PRAGMA foreign_keys = ON');
-  db.exec(SCHEMA);
-  if (!db.prepare("SELECT 1 FROM pragma_table_info('photos') WHERE name = 'angle'").get()) {
-    db.exec('ALTER TABLE photos ADD COLUMN angle TEXT');
-  }
+/**
+ * Opens the database and creates the tables if needed.
+ * `url` is a Turso database URL (libsql://...), a local file (file:tractors.db) or ":memory:".
+ */
+export async function createDb({ url = ':memory:', authToken } = {}) {
+  const db = createClient({ url, authToken });
+  await db.executeMultiple(SCHEMA);
+  const { rows } = await db.execute("SELECT 1 FROM pragma_table_info('photos') WHERE name = 'angle'");
+  if (!rows.length) await db.execute('ALTER TABLE photos ADD COLUMN angle TEXT');
   return db;
 }

@@ -5,8 +5,8 @@ A simple marketplace for second-hand tractors. **Customers** post their tractor 
 ## Features
 
 - Separate customer and broker accounts and login pages (the same mobile number can hold one of each)
-- Customers post a tractor with brand, model, year, hours, expected price, location, description and up to 8 photos
-- Customers see and delete their own posts
+- Customers post a tractor with brand, model, year, hours, expected price, location, description and photos from every angle (front, back, left, right, engine, dashboard & seat, tyres, other; one photo per angle, at least one in total)
+- Customers see, edit and delete their own posts. Editing can change any detail and replace or remove the photo for any angle
 - Brokers see all customer posts with photos and the customer's name and phone, plus search by brand, model or location
 - Photos are private: only brokers and the customer who uploaded them can view them
 - Data is stored in SQLite (Node's built-in `node:sqlite`) and photos in the `uploads/` folder
@@ -50,7 +50,7 @@ public/
   index.html      landing page (choose customer or broker)
   login.html      login (?role=customer | ?role=broker)
   register.html   sign up (?role=customer | ?role=broker)
-  customer.html   post a tractor + my posts
+  customer.html   post / edit a tractor + my posts
   broker.html     all customer posts with photos
   common.js, style.css
 test/app.test.js
@@ -64,7 +64,8 @@ test/app.test.js
 | POST   | `/api/auth/login`      | anyone   | `{ phone, password, role }`              |
 | POST   | `/api/auth/logout`     | anyone   |                                          |
 | GET    | `/api/auth/me`         | logged in|                                          |
-| POST   | `/api/tractors`        | customer | multipart form; photos in field `photos` |
+| POST   | `/api/tractors`        | customer | multipart form; one photo per angle in fields `photo_front`, `photo_rear`, `photo_left`, `photo_right`, `photo_engine`, `photo_dashboard`, `photo_tyres`, `photo_other` |
+| PUT    | `/api/tractors/:id`    | customer | edit own post: same form, photos optional (a new photo replaces that angle's photo), `removePhotoIds` = comma-separated photo ids to delete |
 | GET    | `/api/tractors/mine`   | customer | own posts                                |
 | DELETE | `/api/tractors/:id`    | customer | own post (removes its photos too)        |
 | GET    | `/api/tractors?q=`     | broker   | all posts with photos and contact        |

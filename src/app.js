@@ -9,12 +9,51 @@ import { attachUser, COOKIE, requireRole, setAuthCookie } from './auth.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const IMAGE_TYPES = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' };
-const MAX_PHOTOS = 8;
+// Angles a customer can photograph, in display order (the first one present is the cover).
+// One photo per angle; each is uploaded in its own multipart field, e.g. "photo_front".
+const PHOTO_ANGLES = ['front', 'rear', 'left', 'right', 'engine', 'dashboard', 'tyres', 'other'];
 const PHONE_RE = /^[6-9]\d{9}$/;
 
-class BadRequest extends Error {}
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+class BadRequest extends HttpError {
+  constructor(message) {
+    super(400, message);
+  }
+}
 
 const toInt = (v) => (v === undefined || v === '' ? null : Number(v));
+
+const angleOrder = (angle) => (PHOTO_ANGLES.includes(angle) ? PHOTO_ANGLES.indexOf(angle) : PHOTO_ANGLES.length);
+
+/** Validates the tractor details from a create/edit form. */
+function readDetails(body) {
+  const { brand, model, location, description } = body;
+  const year = toInt(body.year);
+  const hoursUsed = toInt(body.hoursUsed);
+  const expectedPrice = toInt(body.expectedPrice);
+  if (!brand?.trim() || !model?.trim()) throw new BadRequest('Brand and model are required');
+  if (!location?.trim()) throw new BadRequest('Location is required');
+  if (!Number.isInteger(year) || year < 1970 || year > new Date().getFullYear()) {
+    throw new BadRequest('Enter a valid year');
+  }
+  for (const n of [hoursUsed, expectedPrice]) {
+    if (n !== null && (!Number.isInteger(n) || n < 0)) throw new BadRequest('Hours and price must be positive numbers');
+  }
+  return {
+    brand: brand.trim(), model: model.trim(), year, hoursUsed, expectedPrice,
+    location: location.trim(), description: description?.trim() || null,
+  };
+}
+
+/** The photos multer saved for this request, as [{ angle, file }]. */
+const uploadedPhotos = (req) =>
+  Object.entries(req.files ?? {}).map(([field, [file]]) => ({ angle: field.slice('photo_'.length), file }));
 
 const publicUser = (u) => ({ id: u.id, name: u.name, phone: u.phone, role: u.role });
 
@@ -27,10 +66,31 @@ export function createApp({ db, config }) {
       destination: config.uploadDir,
       filename: (_req, file, cb) => cb(null, `${crypto.randomUUID()}${IMAGE_TYPES[file.mimetype]}`),
     }),
-    limits: { fileSize: 5 * 1024 * 1024, files: MAX_PHOTOS },
+    limits: { fileSize: 5 * 1024 * 1024, files: PHOTO_ANGLES.length },
     fileFilter: (_req, file, cb) =>
       IMAGE_TYPES[file.mimetype] ? cb(null, true) : cb(new BadRequest('Photos must be JPG, PNG or WEBP')),
   });
+  const uploadPhotos = upload.fields(PHOTO_ANGLES.map((angle) => ({ name: `photo_${angle}`, maxCount: 1 })));
+
+  // Wraps an upload handler so a failed request leaves no half-written rows or orphaned files.
+  const cleanupOnError = (handler) => (req, res) => {
+    try {
+      handler(req, res);
+    } catch (err) {
+      if (db.isTransaction) db.exec('ROLLBACK');
+      for (const { file } of uploadedPhotos(req)) fs.rmSync(file.path, { force: true });
+      throw err;
+    }
+  };
+
+  // Loads the tractor in :id into req.tractor, if it belongs to the logged-in customer.
+  const ownTractor = (req, _res, next) => {
+    const tractor = db.prepare('SELECT * FROM tractors WHERE id = ?').get(Number(req.params.id));
+    if (!tractor) throw new HttpError(404, 'Not found');
+    if (tractor.customer_id !== req.user.id) throw new HttpError(403, 'Not your post');
+    req.tractor = tractor;
+    next();
+  };
 
   app.use(express.json());
   app.use(attachUser(config.jwtSecret));
@@ -79,7 +139,8 @@ export function createApp({ db, config }) {
 
   const TRACTOR_SELECT = `
     SELECT t.*, u.name AS customer_name, u.phone AS customer_phone,
-      (SELECT json_group_array(filename) FROM (SELECT filename FROM photos p WHERE p.tractor_id = t.id ORDER BY p.id)) AS photo_files
+      (SELECT json_group_array(json_object('id', id, 'filename', filename, 'angle', angle))
+        FROM (SELECT * FROM photos p WHERE p.tractor_id = t.id ORDER BY p.id)) AS photo_json
     FROM tractors t JOIN users u ON u.id = t.customer_id`;
 
   const serialize = (row) => ({
@@ -93,43 +154,60 @@ export function createApp({ db, config }) {
     description: row.description,
     createdAt: row.created_at,
     customer: { name: row.customer_name, phone: row.customer_phone },
-    photos: JSON.parse(row.photo_files).map((f) => `/uploads/${f}`),
+    photos: JSON.parse(row.photo_json)
+      .map((p) => ({ id: p.id, angle: p.angle, url: `/uploads/${p.filename}` }))
+      .sort((a, b) => angleOrder(a.angle) - angleOrder(b.angle)),
   });
 
-  // Customer posts a tractor with photos (multipart form, field "photos").
-  app.post('/api/tractors', requireRole('customer'), upload.array('photos', MAX_PHOTOS), (req, res) => {
-    const files = req.files ?? [];
-    try {
-      const { brand, model, location, description } = req.body;
-      const year = toInt(req.body.year);
-      const hoursUsed = toInt(req.body.hoursUsed);
-      const expectedPrice = toInt(req.body.expectedPrice);
-      if (!brand?.trim() || !model?.trim()) throw new BadRequest('Brand and model are required');
-      if (!location?.trim()) throw new BadRequest('Location is required');
-      if (!Number.isInteger(year) || year < 1970 || year > new Date().getFullYear()) {
-        throw new BadRequest('Enter a valid year');
-      }
-      for (const n of [hoursUsed, expectedPrice]) {
-        if (n !== null && (!Number.isInteger(n) || n < 0)) throw new BadRequest('Hours and price must be positive numbers');
-      }
-      if (!files.length) throw new BadRequest('Add at least one photo of the tractor');
+  const addPhoto = (tractorId, { angle, file }) =>
+    db.prepare('INSERT INTO photos (tractor_id, filename, angle) VALUES (?, ?, ?)').run(tractorId, file.filename, angle);
 
-      db.exec('BEGIN');
-      const { lastInsertRowid: id } = db
-        .prepare(`INSERT INTO tractors (customer_id, brand, model, year, hours_used, expected_price, location, description)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(req.user.id, brand.trim(), model.trim(), year, hoursUsed, expectedPrice, location.trim(), description?.trim() || null);
-      const addPhoto = db.prepare('INSERT INTO photos (tractor_id, filename) VALUES (?, ?)');
-      for (const f of files) addPhoto.run(id, f.filename);
-      db.exec('COMMIT');
+  const getTractor = (id) => serialize(db.prepare(`${TRACTOR_SELECT} WHERE t.id = ?`).get(id));
 
-      res.status(201).json({ tractor: serialize(db.prepare(`${TRACTOR_SELECT} WHERE t.id = ?`).get(id)) });
-    } catch (err) {
-      if (db.isTransaction) db.exec('ROLLBACK');
-      for (const f of files) fs.rmSync(f.path, { force: true });
-      throw err;
+  // Customer posts a tractor with photos (multipart form, one field per angle: "photo_front", "photo_rear", ...).
+  app.post('/api/tractors', requireRole('customer'), uploadPhotos, cleanupOnError((req, res) => {
+    const d = readDetails(req.body);
+    const photos = uploadedPhotos(req);
+    if (!photos.length) throw new BadRequest('Add at least one photo of the tractor');
+
+    db.exec('BEGIN');
+    const { lastInsertRowid: id } = db
+      .prepare(`INSERT INTO tractors (customer_id, brand, model, year, hours_used, expected_price, location, description)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(req.user.id, d.brand, d.model, d.year, d.hoursUsed, d.expectedPrice, d.location, d.description);
+    for (const p of photos) addPhoto(id, p);
+    db.exec('COMMIT');
+
+    res.status(201).json({ tractor: getTractor(id) });
+  }));
+
+  // Customer edits their post. Same form as posting; photos are optional here:
+  // a photo sent for an angle replaces the one already there, and "removePhotoIds"
+  // (comma-separated) deletes photos without replacing them.
+  app.put('/api/tractors/:id', requireRole('customer'), ownTractor, uploadPhotos, cleanupOnError((req, res) => {
+    const { id } = req.tractor;
+    const d = readDetails(req.body);
+    const photos = uploadedPhotos(req);
+    const removeIds = new Set(String(req.body.removePhotoIds ?? '').split(',').filter(Boolean).map(Number));
+    const replacedAngles = new Set(photos.map((p) => p.angle));
+    const existing = db.prepare('SELECT * FROM photos WHERE tractor_id = ?').all(id);
+    const dropped = existing.filter((p) => removeIds.has(p.id) || replacedAngles.has(p.angle));
+    if (existing.length - dropped.length + photos.length === 0) {
+      throw new BadRequest('Keep at least one photo of the tractor');
     }
-  });
+
+    db.exec('BEGIN');
+    db.prepare(`UPDATE tractors SET brand = ?, model = ?, year = ?, hours_used = ?, expected_price = ?, location = ?, description = ?
+                WHERE id = ?`)
+      .run(d.brand, d.model, d.year, d.hoursUsed, d.expectedPrice, d.location, d.description, id);
+    const deletePhoto = db.prepare('DELETE FROM photos WHERE id = ?');
+    for (const p of dropped) deletePhoto.run(p.id);
+    for (const p of photos) addPhoto(id, p);
+    db.exec('COMMIT');
+
+    for (const p of dropped) fs.rmSync(path.join(config.uploadDir, p.filename), { force: true });
+    res.json({ tractor: getTractor(id) });
+  }));
 
   // Customer: their own posts.
   app.get('/api/tractors/mine', requireRole('customer'), (req, res) => {
@@ -147,10 +225,8 @@ export function createApp({ db, config }) {
     res.json({ tractors: rows.map(serialize) });
   });
 
-  app.delete('/api/tractors/:id', requireRole('customer'), (req, res) => {
-    const tractor = db.prepare('SELECT * FROM tractors WHERE id = ?').get(Number(req.params.id));
-    if (!tractor) return res.status(404).json({ error: 'Not found' });
-    if (tractor.customer_id !== req.user.id) return res.status(403).json({ error: 'Not your post' });
+  app.delete('/api/tractors/:id', requireRole('customer'), ownTractor, (req, res) => {
+    const { tractor } = req;
     const files = db.prepare('SELECT filename FROM photos WHERE tractor_id = ?').all(tractor.id);
     db.prepare('DELETE FROM tractors WHERE id = ?').run(tractor.id);
     for (const { filename } of files) fs.rmSync(path.join(config.uploadDir, filename), { force: true });
@@ -171,7 +247,11 @@ export function createApp({ db, config }) {
   app.use(express.static(PUBLIC_DIR, { extensions: ['html'] }));
 
   app.use((err, _req, res, _next) => {
-    if (err instanceof BadRequest || err.name === 'MulterError') return res.status(400).json({ error: err.message });
+    if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
+    if (err.name === 'MulterError') {
+      const message = err.code === 'LIMIT_UNEXPECTED_FILE' ? 'Add only one photo for each angle' : err.message;
+      return res.status(400).json({ error: message });
+    }
     if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid JSON' });
     console.error(err);
     res.status(500).json({ error: 'Something went wrong' });

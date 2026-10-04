@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS tractors (
 CREATE TABLE IF NOT EXISTS photos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   tractor_id INTEGER NOT NULL REFERENCES tractors(id) ON DELETE CASCADE,
-  filename TEXT NOT NULL UNIQUE
+  filename TEXT NOT NULL UNIQUE,
+  angle TEXT -- front, rear, left, ...; NULL for photos uploaded before angles existed
 );
 `;
 
@@ -35,5 +36,8 @@ export function createDb(path = ':memory:') {
   const db = new DatabaseSync(path);
   db.exec('PRAGMA foreign_keys = ON');
   db.exec(SCHEMA);
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('photos') WHERE name = 'angle'").get()) {
+    db.exec('ALTER TABLE photos ADD COLUMN angle TEXT');
+  }
   return db;
 }

@@ -1,5 +1,3 @@
-import { createClient } from '@libsql/client';
-
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,6 +35,9 @@ CREATE TABLE IF NOT EXISTS photos (
  * `url` is a Turso database URL (libsql://...), a local file (file:tractors.db) or ":memory:".
  */
 export async function createDb({ url = ':memory:', authToken } = {}) {
+  // A remote database only needs the HTTP client, which has no native parts to load on a server like Vercel.
+  const local = url === ':memory:' || url.startsWith('file:');
+  const { createClient } = local ? await import('@libsql/client') : await import('@libsql/client/web');
   const db = createClient({ url, authToken });
   await db.executeMultiple(SCHEMA);
   const { rows } = await db.execute("SELECT 1 FROM pragma_table_info('photos') WHERE name = 'angle'");

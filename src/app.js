@@ -4,8 +4,8 @@ import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AiError, documentChunks } from './ai.js';
-import { attachUser, COOKIE, requireRole, setAuthCookie } from './auth.js';
+import { AiError, documentChunks, LANGUAGES } from './ai.js';
+import { createSessions, notLoggedIn, requireRole } from './auth.js';
 import { DOC_TYPES, MIN_PHOTOS, PHOTO_LABELS, verifyListing } from './verify.js';
 
 const CLIENT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
@@ -75,10 +75,21 @@ function readChat(messages) {
 
 // Guardrails enforced here, not just asked of the model: an answer it marks off topic, or one far longer than
 // its job needs (a sign it was talked into something else), is replaced with these fixed messages.
+// Each in the language the person wrote in (one language only, like the assistant's own replies).
 const OFF_TOPIC = {
-  customer: 'मी फक्त तुमच्या ट्रॅक्टरची माहिती, फोटो आणि कागदपत्रे यासाठी मदत करू शकतो. / I can only help with listing your tractor, its photos and papers.',
-  broker: "I can only answer questions about this tractor's papers and photos.",
+  customer: {
+    mr: 'मी फक्त तुमच्या ट्रॅक्टरची माहिती, फोटो आणि कागदपत्रे यासाठी मदत करू शकतो.',
+    hi: 'मैं सिर्फ़ आपके ट्रैक्टर की जानकारी, फ़ोटो और कागज़ात में मदद कर सकता हूँ।',
+    en: 'I can only help with listing your tractor, its photos and papers.',
+  },
+  broker: {
+    mr: 'मी फक्त या ट्रॅक्टरच्या कागदपत्रांबद्दल आणि फोटोंबद्दल प्रश्नांची उत्तरे देऊ शकतो.',
+    hi: 'मैं सिर्फ़ इस ट्रैक्टर के कागज़ात और फ़ोटो के बारे में सवालों के जवाब दे सकता हूँ।',
+    en: "I can only answer questions about this tractor's papers and photos.",
+  },
 };
+/** The language to answer in: the one the model found, else Devanagari text counts as Marathi. */
+const replyLanguage = (language, text) => (LANGUAGES.includes(language) ? language : /[\u0900-\u097F]/.test(text) ? 'mr' : 'en');
 const MAX_REPLY = 1200;
 const withinLimit = (text, max) => typeof text === 'string' && text.trim().length > 0 && text.length <= max;
 
@@ -180,8 +191,10 @@ export function createApp({ db, config, storage, ai }) {
     next();
   };
 
+  const sessions = createSessions(db, config);
+
   app.use(express.json());
-  app.use(attachUser(config.jwtSecret));
+  app.use(sessions.attach);
 
   // ---------- Auth (customers and brokers have separate accounts and logins) ----------
 
@@ -198,29 +211,66 @@ export function createApp({ db, config, storage, ai }) {
       'INSERT INTO users (name, phone, password_hash, role) VALUES (?, ?, ?, ?) RETURNING *',
       name.trim(), phone, await bcrypt.hash(password, 10), role,
     );
-    setAuthCookie(res, user, config);
+    await sessions.start(req, res, user, req.body.remember === true);
     res.status(201).json({ user: publicUser(user) });
   });
 
   app.post('/api/auth/login', async (req, res) => {
-    const { phone, password, role } = req.body ?? {};
+    const { phone, password, role, remember } = req.body ?? {};
     const user = await one('SELECT * FROM users WHERE phone = ? AND role = ?', phone ?? '', role ?? '');
     if (!user || !(await bcrypt.compare(password ?? '', user.password_hash))) {
       return res.status(401).json({ error: 'Incorrect mobile number or password' });
     }
-    setAuthCookie(res, user, config);
+    await sessions.start(req, res, user, remember === true);
     res.json({ user: publicUser(user) });
   });
 
-  app.post('/api/auth/logout', (_req, res) => {
-    res.clearCookie(COOKIE);
+  app.post('/api/auth/logout', async (req, res) => {
+    await sessions.end(req, res);
     res.status(204).end();
   });
 
+  // The logged-in user, and how long their session may sit idle (the page logs out after that).
   app.get('/api/auth/me', async (req, res) => {
     const user = req.user && (await one('SELECT * FROM users WHERE id = ?', req.user.id));
-    if (!user) return res.status(401).json({ error: 'Not logged in' });
-    res.json({ user: publicUser(user) });
+    if (!user) return notLoggedIn(req, res);
+    res.json({ user: publicUser(user), session: { remember: req.session.remember, idleMs: req.session.idleMs } });
+  });
+
+  // The devices the user is logged in on.
+  app.get('/api/auth/sessions', async (req, res) => {
+    if (!req.user) return notLoggedIn(req, res);
+    const rows = await all(
+      // This device first, then the most recently used.
+      'SELECT id, device, remember, created_at, last_seen_at FROM sessions WHERE user_id = ? ORDER BY id = ? DESC, last_seen_at DESC',
+      req.user.id, req.session.id,
+    );
+    res.json({
+      sessions: rows.map((s) => ({
+        id: s.id, device: s.device, remember: Boolean(s.remember), createdAt: s.created_at, lastSeenAt: s.last_seen_at,
+        current: s.id === req.session.id,
+      })),
+    });
+  });
+
+  // Log out one device.
+  app.delete('/api/auth/sessions/:id', async (req, res) => {
+    if (!req.user) return notLoggedIn(req, res);
+    const { rowsAffected } = await db.execute({
+      sql: 'DELETE FROM sessions WHERE id = ? AND user_id = ?', args: [Number(req.params.id), req.user.id],
+    });
+    if (!rowsAffected) throw new HttpError(404, 'Not found');
+    if (Number(req.params.id) === req.session.id) await sessions.end(req, res);
+    res.status(204).end();
+  });
+
+  // Log out every device except this one.
+  app.delete('/api/auth/sessions', async (req, res) => {
+    if (!req.user) return notLoggedIn(req, res);
+    const { rowsAffected } = await db.execute({
+      sql: 'DELETE FROM sessions WHERE user_id = ? AND id != ?', args: [req.user.id, req.session.id],
+    });
+    res.json({ ended: rowsAffected });
   });
 
   // ---------- Tractors ----------
@@ -348,10 +398,13 @@ export function createApp({ db, config, storage, ai }) {
   app.post('/api/assistant/form', requireRole('customer'), async (req, res) => {
     const messages = readChat(req.body?.messages);
     const form = cleanFields(req.body?.form ?? {});
-    const { onTopic, reply, fields } = await ai.fillForm(messages, form);
+    const { language, onTopic, reply, fields } = await ai.fillForm(messages, form);
     // Off-topic turns can't change the form, and get a fixed reply rather than whatever the model wrote.
-    if (!onTopic || !withinLimit(reply, MAX_REPLY)) return res.json({ reply: OFF_TOPIC.customer, fields: form, offTopic: true });
-    res.json({ reply, fields: cleanFields(fields) });
+    if (!onTopic || !withinLimit(reply, MAX_REPLY)) {
+      const lang = replyLanguage(language, messages.at(-1).content);
+      return res.json({ reply: OFF_TOPIC.customer[lang], fields: form, offTopic: true, language: lang });
+    }
+    res.json({ reply, fields: cleanFields(fields), language: replyLanguage(language, reply) });
   });
 
   // Step 2 of posting or saving: the photo check. If it fails (e.g. the AI is unavailable) the listing is still
@@ -403,7 +456,7 @@ export function createApp({ db, config, storage, ai }) {
 
   // A broker (or the owner) asks a question about a tractor's papers; answered from the closest document chunks.
   app.post('/api/tractors/:id/ask', async (req, res) => {
-    if (!req.user) throw new HttpError(401, 'Please log in');
+    if (!req.user) return notLoggedIn(req, res);
     const tractor = await one('SELECT customer_id FROM tractors WHERE id = ?', Number(req.params.id));
     if (!tractor) throw new HttpError(404, 'Not found');
     if (req.user.role !== 'broker' && tractor.customer_id !== req.user.id) throw new HttpError(403, 'Not your post');
@@ -422,8 +475,10 @@ export function createApp({ db, config, storage, ai }) {
       id, JSON.stringify(embedding),
     );
     if (!chunks.length) return res.json({ answer: 'Nothing has been added for this tractor that I can answer from yet.' });
-    const { onTopic, answer } = await ai.answer(question, chunks.map((c) => c.content));
-    if (!onTopic || !withinLimit(answer, MAX_REPLY)) return res.json({ answer: OFF_TOPIC.broker, offTopic: true });
+    const { language, onTopic, answer } = await ai.answer(question, chunks.map((c) => c.content));
+    if (!onTopic || !withinLimit(answer, MAX_REPLY)) {
+      return res.json({ answer: OFF_TOPIC.broker[replyLanguage(language, question)], offTopic: true });
+    }
     res.json({ answer });
   });
 

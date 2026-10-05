@@ -160,3 +160,16 @@ input, textarea { display: block; width: 100%; margin-top: 4px; padding: 10px; f
 .spinner { width: 20px; height: 20px; border-radius: 50%; border: 3px solid #dfe5d8; border-top-color: var(--green); animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .check-card .issues { margin: 0 0 14px; }
+/* ---------- Login sessions ---------- */
+.check { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+.check input { width: auto; margin: 0; }
+.notice { background: #e8f1fb; color: #1d4f80; padding: 10px; border-radius: 8px; margin-bottom: 12px; }
+header .who { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+header .home-link { font-size: 1rem; font-weight: 500; }
+header .btn { padding: 6px 12px; font-size: .9rem; }
+.narrow-wide { max-width: 640px; }
+.sessions { list-style: none; padding: 0; margin: 0 0 12px; }
+.sessions li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
+.sessions li.current b { color: var(--green-dark); }
+.sessions .hint { margin: 2px 0 0; }
+.tag { display: inline-block; font-size: .7rem; font-weight: 700; background: #e6f2e4; color: var(--green-dark); padding: 1px 6px; border-radius: 4px; }

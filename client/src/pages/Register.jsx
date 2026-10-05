@@ -13,7 +13,9 @@ export default function Register() {
     e.preventDefault();
     const f = new FormData(e.target);
     try {
-      await postJson('/api/auth/register', { name: f.get('name'), phone: f.get('phone'), password: f.get('password'), role });
+      await postJson('/api/auth/register', {
+        name: f.get('name'), phone: f.get('phone'), password: f.get('password'), role, remember: f.has('remember'),
+      });
       navigate(`/${role}`);
     } catch (err) {
       setError(err.message);
@@ -30,6 +32,7 @@ export default function Register() {
           <label>Full name <input name="name" required autoFocus /></label>
           <label>Mobile number <input name="phone" inputMode="numeric" maxLength={10} required /></label>
           <label>Password <input name="password" type="password" minLength={6} required /></label>
+          <label className="check"><input name="remember" type="checkbox" /> Keep me logged in on this device</label>
           <button className="btn btn-primary btn-block">Create account</button>
           <p className="muted">Already have an account? <Link to={`/login?role=${role}`}>Log in</Link></p>
         </form>

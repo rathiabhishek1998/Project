@@ -1,11 +1,17 @@
 // Talking to the server, plus small formatting helpers shared by the pages.
 
+// Fired when the server says the login has ended; the page then goes to the login form and says why.
+// event.detail is 'idle' (too long without activity) or 'elsewhere' (logged out from another device).
+export const SESSION_ENDED = 'session-ended';
+export const ENDED_REASONS = { session_ended: 'idle', session_revoked: 'elsewhere' };
+
 export async function api(path, options = {}) {
   const res = await fetch(path, { credentials: 'same-origin', ...options });
   if (res.status === 204) return null;
   if (res.status === 413) throw new Error('The photos are too large to upload. Try fewer or smaller photos.');
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'Something went wrong');
+  if (ENDED_REASONS[data.code]) window.dispatchEvent(new CustomEvent(SESSION_ENDED, { detail: ENDED_REASONS[data.code] }));
+  if (!res.ok) throw Object.assign(new Error(data.error || 'Something went wrong'), { code: data.code });
   return data;
 }
 

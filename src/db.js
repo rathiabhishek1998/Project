@@ -52,6 +52,20 @@ CREATE TABLE IF NOT EXISTS doc_chunks (
   embedding F32_BLOB(${EMBED_DIMENSIONS}) NOT NULL
 );
 CREATE INDEX IF NOT EXISTS doc_chunks_tractor ON doc_chunks (tractor_id);
+
+-- Login sessions (see auth.js). Times are milliseconds since 1970. token_hash is the SHA-256 of the cookie's token.
+CREATE TABLE IF NOT EXISTS sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_hash TEXT NOT NULL UNIQUE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  remember INTEGER NOT NULL,
+  idle_ms INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  device TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user_id);
 `;
 
 /**

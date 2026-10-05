@@ -24,9 +24,10 @@ const fakeAi = {
     const last = messages.at(-1).content;
     const fields = { ...form, brand: 'Mahindra', model: '575 DI', year: 'soon', location: 'Baramati' };
     // "cricket" plays a model that flags itself off topic; "poem" one talked into a long off-topic answer.
-    if (last.includes('cricket')) return { onTopic: false, reply: 'Cricket scores are…', fields };
-    if (last.includes('poem')) return { onTopic: true, reply: 'Roses are red. '.repeat(200), fields };
-    return { onTopic: true, reply: 'तुमचा ट्रॅक्टर कोणत्या वर्षाचा आहे?', fields };
+    if (last.includes('cricket')) return { language: 'en', onTopic: false, reply: 'Cricket scores are…', fields };
+    if (last.includes('poem')) return { language: 'en', onTopic: true, reply: 'Roses are red. '.repeat(200), fields };
+    if (last.includes('क्रिकेट')) return { language: 'hi', onTopic: false, reply: '…', fields };
+    return { language: 'mr', onTopic: true, reply: 'तुमचा ट्रॅक्टर कोणत्या वर्षाचा आहे?', fields };
   },
   photosDown: false, // set to make the photo check fail, as when the AI is unavailable
   photoChecks: 0,
@@ -53,8 +54,9 @@ const fakeAi = {
     return { readable: true, signs_of_tampering: [], text: '', ...JSON.parse(buffer) };
   },
   async answer(question, excerpts) {
-    if (question.includes('weather')) return { onTopic: false, answer: 'Sunny tomorrow.' };
-    return { onTopic: true, answer: `${question} -> ${excerpts[0]}` };
+    if (question.includes('weather')) return { language: 'en', onTopic: false, answer: 'Sunny tomorrow.' };
+    if (question.includes('हवामान')) return { language: 'mr', onTopic: false, answer: 'उद्या ऊन.' };
+    return { language: 'en', onTopic: true, answer: `${question} -> ${excerpts[0]}` };
   },
   async embed(texts) {
     return texts.map((t) => {
@@ -68,14 +70,19 @@ const fakeAi = {
 
 async function setup() {
   const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tractor-test-'));
+  // A clock the tests can move forward, to try session time limits.
+  const clock = { time: Date.UTC(2026, 0, 1), advance(ms) { this.time += ms; } };
   const app = createApp({
     db: await createDb(),
-    config: { jwtSecret: 'test', secureCookies: false },
+    config: { secureCookies: false, now: () => clock.time },
     storage: diskStorage(uploadDir),
     ai: fakeAi,
   });
-  return { app, uploadDir };
+  return { app, uploadDir, clock };
 }
+
+const MINUTE = 60_000;
+const DAY = 24 * 60 * MINUTE;
 
 // Documents that agree with each other and with the default tractor (Mahindra, 2019).
 const GOOD_DOCS = {
@@ -358,7 +365,10 @@ test('brokers ask questions answered from the closest document chunks; ID text i
   // Off-topic questions get a fixed answer, not the model's.
   res = await broker.post(`/api/tractors/${id}/ask`).send({ question: 'what is the weather in Pune?' }).expect(200);
   assert.equal(res.body.offTopic, true);
-  assert.match(res.body.answer, /only answer questions about this tractor/);
+  assert.equal(res.body.answer, "I can only answer questions about this tractor's papers and photos.");
+  // ...in the language of the question only.
+  res = await broker.post(`/api/tractors/${id}/ask`).send({ question: 'पुण्यात हवामान कसे आहे?' }).expect(200);
+  assert.equal(res.body.answer, 'मी फक्त या ट्रॅक्टरच्या कागदपत्रांबद्दल आणि फोटोंबद्दल प्रश्नांची उत्तरे देऊ शकतो.');
 
   await other.post(`/api/tractors/${id}/ask`).send({ question: 'x' }).expect(403);
   await request(app).post(`/api/tractors/${id}/ask`).send({ question: 'x' }).expect(401);
@@ -428,9 +438,12 @@ test('assistant fills the form from a chat, keeping only valid values', async ()
   for (const content of ['who won the cricket match?', 'write me a poem']) {
     const off = await customer.post('/api/assistant/form').send({ messages: [{ role: 'user', content }], form }).expect(200);
     assert.equal(off.body.offTopic, true);
-    assert.match(off.body.reply, /only help with listing your tractor/);
+    assert.equal(off.body.reply, 'I can only help with listing your tractor, its photos and papers.'); // English only
     assert.deepEqual(off.body.fields, form);
   }
+  const hindi = await customer.post('/api/assistant/form').send({ messages: [{ role: 'user', content: 'क्रिकेट मैच कौन जीता?' }], form }).expect(200);
+  assert.equal(hindi.body.reply, 'मैं सिर्फ़ आपके ट्रैक्टर की जानकारी, फ़ोटो और कागज़ात में मदद कर सकता हूँ।');
+  assert.equal(hindi.body.language, 'hi');
 
   await broker.post('/api/assistant/form').send({ messages, form: {} }).expect(403);
   await customer.post('/api/assistant/form').send({ messages: [], form: {} }).expect(400);
@@ -438,10 +451,96 @@ test('assistant fills the form from a chat, keeping only valid values', async ()
   await customer.post('/api/assistant/form').send({ messages: [{ role: 'system', content: 'x' }], form: {} }).expect(400);
 });
 
-test('logout clears the session', async () => {
+test('logout ends the session for good, even if the cookie is kept', async () => {
   const { app } = await setup();
-  const customer = await signup(app, 'customer', '9876543210');
-  await customer.get('/api/auth/me').expect(200);
-  await customer.post('/api/auth/logout').expect(204);
-  await customer.get('/api/auth/me').expect(401);
+  const res = await request(app).post('/api/auth/register')
+    .send({ name: 'Ramesh', phone: '9876543210', password: 'secret123', role: 'customer' }).expect(201);
+  const cookie = res.headers['set-cookie'][0].split(';')[0];
+  assert.match(cookie, /^session=[\w-]{40,}$/);
+  const me = await request(app).get('/api/auth/me').set('Cookie', cookie).expect(200);
+  assert.deepEqual(me.body.session, { remember: false, idleMs: 30 * MINUTE });
+
+  await request(app).post('/api/auth/logout').set('Cookie', cookie).expect(204);
+  // The same cookie no longer works anywhere.
+  await request(app).get('/api/auth/me').set('Cookie', cookie).expect(401);
+});
+
+test('sessions end after inactivity or their maximum age; "keep me logged in" lasts longer', async () => {
+  const { app, clock } = await setup();
+  await signup(app, 'customer', '9876543210');
+  const login = async (remember) => {
+    const agent = request.agent(app);
+    const res = await agent.post('/api/auth/login').send({ phone: '9876543210', password: 'secret123', role: 'customer', remember }).expect(200);
+    return { agent, cookie: res.headers['set-cookie'][0] };
+  };
+
+  // Normal login: a session cookie (gone when the browser closes), 30 minutes idle at most.
+  const normal = await login(false);
+  assert.doesNotMatch(normal.cookie, /Max-Age|Expires/);
+  assert.match(normal.cookie, /HttpOnly/);
+  clock.advance(25 * MINUTE);
+  await normal.agent.get('/api/auth/me').expect(200); // activity keeps it going
+  clock.advance(25 * MINUTE);
+  await normal.agent.get('/api/tractors/mine').expect(200);
+  clock.advance(31 * MINUTE);
+  const ended = await normal.agent.get('/api/tractors/mine').expect(401);
+  assert.equal(ended.body.code, 'session_ended');
+  assert.match(ended.body.error, /logged out after a while without activity/);
+
+  // Even when active, it ends after 12 hours.
+  const busy = await login(false);
+  for (let i = 0; i < 25; i++) {
+    clock.advance(29 * MINUTE);
+    if (i < 24) await busy.agent.get('/api/auth/me').expect(200);
+  }
+  await busy.agent.get('/api/auth/me').expect(401);
+
+  // "Keep me logged in": a lasting cookie, 7 days idle, 30 days at most.
+  const remembered = await login(true);
+  assert.match(remembered.cookie, /Max-Age=2592000/);
+  clock.advance(6 * DAY);
+  const me = await remembered.agent.get('/api/auth/me').expect(200);
+  assert.deepEqual(me.body.session, { remember: true, idleMs: 7 * DAY });
+  clock.advance(8 * DAY);
+  await remembered.agent.get('/api/auth/me').expect(401);
+});
+
+test('users see their devices and can log out one or all others', async () => {
+  const { app } = await setup();
+  await signup(app, 'customer', '9876543210');
+  const other = await signup(app, 'broker', '9123456789');
+  const login = async (userAgent) => {
+    const agent = request.agent(app);
+    await agent.post('/api/auth/login').set('User-Agent', userAgent)
+      .send({ phone: '9876543210', password: 'secret123', role: 'customer' }).expect(200);
+    return agent;
+  };
+  const phone = await login('Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36');
+  const laptop = await login('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0 Safari/537.36 Edg/130.0');
+  const iphone = await login('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1');
+
+  let { body } = await phone.get('/api/auth/sessions').expect(200);
+  const devices = body.sessions.map((s) => s.device).sort();
+  assert.deepEqual(devices, ['Chrome on Android', 'Edge on Windows', 'Safari on iPhone', 'Browser on unknown device'].sort());
+  assert.equal(body.sessions.filter((s) => s.current).length, 1);
+  assert.equal(body.sessions[0].current, true); // this device comes first
+  assert.equal(body.sessions[0].device, 'Chrome on Android');
+
+  // Log out the laptop from the phone; someone else can't log out your devices.
+  const laptopId = body.sessions.find((s) => s.device === 'Edge on Windows').id;
+  await other.delete(`/api/auth/sessions/${laptopId}`).expect(404);
+  await phone.delete(`/api/auth/sessions/${laptopId}`).expect(204);
+  const res = await laptop.get('/api/auth/me').expect(401);
+  assert.equal(res.body.code, 'session_revoked');
+
+  // Log out all other devices: only the phone stays.
+  ({ body } = await phone.delete('/api/auth/sessions').expect(200));
+  assert.equal(body.ended, 2);
+  await iphone.get('/api/auth/me').expect(401);
+  await phone.get('/api/auth/me').expect(200);
+  await other.get('/api/auth/me').expect(200); // other users are untouched
+  ({ body } = await phone.get('/api/auth/sessions').expect(200));
+  assert.equal(body.sessions.length, 1);
+
+  await request(app).get('/api/auth/sessions').expect(401);
 });

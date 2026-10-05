@@ -18,7 +18,6 @@ export async function buildApp(env = process.env) {
   const onVercel = Boolean(env.VERCEL);
   const useBlob = Boolean(env.BLOB_READ_WRITE_TOKEN || env.BLOB_STORE_ID);
 
-  if (production && !env.JWT_SECRET) throw new ConfigError('Set JWT_SECRET in production');
   // Vercel servers keep no files between requests, so data and photos must live in Turso and Vercel Blob.
   if (onVercel && !env.TURSO_DATABASE_URL) {
     throw new ConfigError('Connect a Turso database (TURSO_DATABASE_URL) in Vercel');
@@ -30,7 +29,7 @@ export async function buildApp(env = process.env) {
     authToken: env.TURSO_AUTH_TOKEN,
   });
   const storage = useBlob ? blobStorage() : diskStorage(env.UPLOAD_DIR ?? path.join(root, 'uploads'));
-  const config = { jwtSecret: env.JWT_SECRET ?? 'dev-only-secret', secureCookies: production };
+  const config = { secureCookies: production };
 
   // Without these keys the site still works; the assistant and document checks say they are not set up.
   const ai = createAi({ anthropicKey: env.ANTHROPIC_API_KEY, voyageKey: env.VOYAGE_API_KEY });

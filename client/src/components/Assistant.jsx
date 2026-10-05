@@ -3,18 +3,53 @@ import { api } from '../api.js';
 
 const Recognition = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
 const LANGUAGES = { 'mr-IN': 'मराठी', 'hi-IN': 'हिंदी', 'en-IN': 'English' };
-const GREETING = 'नमस्कार! तुमच्या ट्रॅक्टरबद्दल सांगा — कंपनी, मॉडेल, वर्ष, गाव आणि अपेक्षित किंमत. मी फॉर्म भरतो. (You can also talk in English.)';
+// Shown in the chosen language only, like every reply.
+const GREETINGS = {
+  'mr-IN': 'नमस्कार! तुमच्या ट्रॅक्टरबद्दल सांगा — कंपनी, मॉडेल, वर्ष, गाव आणि अपेक्षित किंमत. मी फॉर्म भरतो.',
+  'hi-IN': 'नमस्ते! अपने ट्रैक्टर के बारे में बताइए — कंपनी, मॉडल, साल, गाँव और अपेक्षित कीमत। मैं फ़ॉर्म भर दूँगा।',
+  'en-IN': 'Hello! Tell me about your tractor: brand, model, year, village and expected price. I will fill in the form.',
+};
 const MAX_MESSAGES = 39; // the server accepts 40; always send an odd number so the history starts with the customer
 
-/** Reads the reply aloud in the chosen language, if the browser has a voice for it (Hindi voices read Marathi well). */
-function speak(text, lang) {
-  if (!window.speechSynthesis) return;
-  const voices = speechSynthesis.getVoices();
-  const voice = voices.find((v) => v.lang === lang) ?? (lang === 'mr-IN' ? voices.find((v) => v.lang === 'hi-IN') : null);
+// The assistant always speaks with one voice. An Indian Hindi voice reads Marathi (same script), Hindi and
+// English, so it is preferred; the voice picked is remembered on this device so it never changes between replies.
+const VOICE_KEY = 'assistant-voice';
+const VOICE_PREFERENCE = [
+  (v) => v.lang === 'hi-IN' && /google/i.test(v.name),
+  (v) => v.lang === 'hi-IN',
+  (v) => v.lang === 'mr-IN',
+  (v) => v.lang === 'en-IN',
+];
+
+function assistantVoice() {
+  const voices = window.speechSynthesis?.getVoices() ?? [];
+  if (!voices.length) return null; // not loaded yet
+  let saved = null;
+  try {
+    saved = localStorage.getItem(VOICE_KEY);
+  } catch {
+    // storage blocked: pick the same way every time instead
+  }
+  const voice = voices.find((v) => v.name === saved) ?? VOICE_PREFERENCE.map((match) => voices.find(match)).find(Boolean);
+  if (!voice) return null;
+  try {
+    localStorage.setItem(VOICE_KEY, voice.name);
+  } catch {
+    // fine, see above
+  }
+  return voice;
+}
+
+/** Reads a reply aloud in the assistant's one voice (skipped when no suitable voice can read it). */
+function speak(text) {
+  const voice = assistantVoice();
   if (!voice) return;
+  if (voice.lang.startsWith('en') && /[\u0900-\u097F]/.test(text)) return; // an English-only voice can't read Devanagari
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.voice = voice;
   utterance.lang = voice.lang;
+  utterance.rate = 1;
+  utterance.pitch = 1;
   speechSynthesis.cancel();
   speechSynthesis.speak(utterance);
 }
@@ -37,6 +72,14 @@ export default function Assistant({ form, onFields }) {
     log.current?.scrollTo({ top: log.current.scrollHeight, behavior: 'smooth' });
   }, [messages, busy]);
   useEffect(() => () => recognition.current?.abort(), []);
+  // Browsers load their voices in the background; ask early so the voice is ready for the first reply.
+  useEffect(() => {
+    if (!window.speechSynthesis) return undefined;
+    speechSynthesis.getVoices();
+    const ready = () => assistantVoice();
+    speechSynthesis.addEventListener('voiceschanged', ready);
+    return () => speechSynthesis.removeEventListener('voiceschanged', ready);
+  }, []);
 
   async function send(text, { spoken = false } = {}) {
     text = text.trim();
@@ -54,7 +97,7 @@ export default function Assistant({ form, onFields }) {
       });
       setMessages([...sent, { role: 'assistant', content: reply }]);
       onFields(fields);
-      if (spoken) speak(reply, lang);
+      if (spoken) speak(reply);
     } catch (err) {
       setMessages(messages); // take the unanswered message back out, so the history stays user/assistant pairs
       setInput(text);
@@ -97,7 +140,7 @@ export default function Assistant({ form, onFields }) {
         </select>
       </div>
       <div className="chat-log" ref={log}>
-        <p className="bubble bot">{GREETING}</p>
+        <p className="bubble bot">{GREETINGS[lang]}</p>
         {messages.map((m, i) => <p key={i} className={`bubble ${m.role === 'user' ? 'me' : 'bot'}`}>{m.content}</p>)}
         {busy && <p className="bubble bot typing">…</p>}
       </div>

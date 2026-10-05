@@ -7,3 +7,4 @@ uploads/*
 .env
 .DS_Store
 .vercel
+dist/

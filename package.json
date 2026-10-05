@@ -2,12 +2,13 @@
   "name": "tractor-marketplace",
   "private": true,
   "version": "0.1.0",
-  "description": "Simple second-hand tractor marketplace: customers post tractors with photos, brokers browse them",
+  "description": "Simple second-hand tractor marketplace: customers post tractors with photos, brokers browse them (React + Express)",
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js",
-    "test": "node --test \"test/*.test.js\""
+    "dev": "vite",
+    "test": "node --test \"test/*.test.js\"",
+    "build": "vite build"
   },
   "engines": {
     "node": "22.x"
@@ -21,6 +22,11 @@
     "multer": "^2.0.2"
   },
   "devDependencies": {
-    "supertest": "^7.1.4"
+    "@vitejs/plugin-react": "^6.1.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-router": "^8.4.0",
+    "supertest": "^7.1.4",
+    "vite": "^8.3.2"
   }
 }

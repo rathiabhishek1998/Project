@@ -15,19 +15,20 @@ A simple marketplace for second-hand tractors. **Customers** post their tractor 
 
 - Node.js 22 with Express 5
 - SQLite via `@libsql/client` (local file or Turso), so there is no database server to install
-- Plain HTML, CSS and JavaScript in `public/`, so there is no frontend build step
+- React 19 + React Router in `client/`, built with Vite into `dist/`
 - Logins use a JWT in an httpOnly cookie and passwords are hashed with bcrypt
 
 ## Run it
 
 ```bash
 npm install
-npm start            # http://localhost:3000
-npm run dev          # same, restarts on file changes
+npm run dev          # http://localhost:5173 — React app with hot reload + the API on the same port
+npm run build        # build the React app into dist/
+npm start            # http://localhost:3000 — serves the API and the built app from dist/
 npm test             # API tests
 ```
 
-Open http://localhost:3000, pick **Customer** or **Broker**, and sign up.
+Open the app, pick **Customer** or **Broker**, and sign up. `npm run dev` runs the Express API inside the Vite dev server; restart it after changing files in `src/`.
 
 ### Configuration (environment variables)
 
@@ -42,9 +43,9 @@ Open http://localhost:3000, pick **Customer** or **Broker**, and sign up.
 
 ## Deploy on Vercel
 
-On Vercel there is no `npm start`: `api/index.js` runs the Express app as a serverless function, and `vercel.json` serves `public/` as static pages and sends `/api/*` and `/uploads/*` to that function. Vercel servers keep no files between requests, so the database and photos must live in hosted storage:
+On Vercel there is no `npm start`: `api/index.js` runs the Express app as a serverless function, and `vercel.json` builds the React app (`npm run build`), serves `dist/` as static files, sends `/api/*` and `/uploads/*` to that function, and sends every other path to `index.html` so React can show the right page. Vercel servers keep no files between requests, so the database and photos must live in hosted storage:
 
-1. Import the GitHub repo in Vercel (no build command needed; `vercel.json` sets everything).
+1. Import the GitHub repo in Vercel (`vercel.json` sets the build command and output folder).
 2. **Storage → Create → Blob**: choose **Private** access and connect it to the project. This adds `BLOB_READ_WRITE_TOKEN`.
 3. **Storage → Marketplace → Turso** (or create a database at turso.tech): connect it to the project. This should add `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`; if you created the database on turso.tech, add those two yourself under Settings → Environment Variables.
 4. **Settings → Environment Variables**: add `JWT_SECRET` set to any long random text.
@@ -64,14 +65,22 @@ src/
   app.js      routes: auth, tractors, photo serving
   auth.js     cookie/JWT helpers and role checks
   db.js       database connection and schema (users, tractors, photos)
-public/
-  index.html      landing page (choose customer or broker)
-  login.html      login (?role=customer | ?role=broker)
-  register.html   sign up (?role=customer | ?role=broker)
-  customer.html   post / edit a tractor + my posts
-  broker.html     all customer posts with photos
-  common.js, style.css
+client/                 React app (built into dist/)
+  index.html
+  src/
+    main.jsx            routes
+    api.js              fetch helper, formatting, photo shrinking
+    auth.js             login check hooks
+    style.css
+    components/         Header, TractorCard, PhotoSlots, Lightbox
+    pages/
+      Home.jsx          landing page (choose customer or broker)
+      Login.jsx         /login?role=customer | broker
+      Register.jsx      /register?role=customer | broker
+      Customer.jsx      /customer: post / edit a tractor + my posts
+      Broker.jsx        /broker: all customer posts with photos
 test/app.test.js
+vite.config.js
 vercel.json
 ```
 

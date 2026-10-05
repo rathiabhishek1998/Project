@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { attachUser, COOKIE, requireRole, setAuthCookie } from './auth.js';
 
-const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
+const CLIENT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 const IMAGE_TYPES = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' };
 // Angles a customer can photograph, in display order (the first one present is the cover).
 // One photo per angle; each is uploaded in its own multipart field, e.g. "photo_front".
@@ -261,8 +261,11 @@ export function createApp({ db, config, storage }) {
     await storage.send(res, req.params.file);
   });
 
-  // Locally the app serves the pages too; on Vercel they are served as static files before reaching here.
-  app.use(express.static(PUBLIC_DIR, { extensions: ['html'] }));
+  // Locally the app serves the built React app (npm run build) too; on Vercel it is served as static files.
+  // Every other page path gets index.html, and React picks the page from the URL.
+  app.use(express.static(CLIENT_DIR));
+  app.get('/{*page}', (req, res, next) =>
+    req.path.startsWith('/api/') ? next() : res.sendFile(path.join(CLIENT_DIR, 'index.html'), (err) => err && next()));
 
   app.use((err, _req, res, next) => {
     if (res.headersSent) return next(err);

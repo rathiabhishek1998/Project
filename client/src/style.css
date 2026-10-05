@@ -103,3 +103,60 @@ input, textarea { display: block; width: 100%; margin-top: 4px; padding: 10px; f
 @media (max-width: 800px) {
   .layout, .row { grid-template-columns: 1fr; }
 }
+/* ---------- Assistant chat ---------- */
+.stack { display: grid; gap: 16px; }
+.assistant { padding: 14px; }
+.assistant-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+.assistant-head select { font: inherit; font-size: .85rem; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+.chat-log { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 4px 2px 8px; }
+.bubble { margin: 0; padding: 8px 12px; border-radius: 14px; max-width: 85%; line-height: 1.35; font-size: .92rem; white-space: pre-wrap; }
+.bubble.bot { background: #eef4ea; align-self: flex-start; border-bottom-left-radius: 4px; }
+.bubble.me { background: var(--green); color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; }
+.bubble.typing { color: var(--muted); letter-spacing: 2px; }
+.chat-input { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+.chat-input input { margin: 0; flex: 1; min-width: 0; }
+.chat-input .btn { padding: 10px 14px; flex-shrink: 0; }
+.mic { background: #fff; border: 1px solid var(--border); font-size: 1.1rem; }
+.mic.on { background: var(--red); color: #fff; border-color: var(--red); animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(198, 40, 40, .2); } }
+.answer { margin: 8px 0 0; padding: 8px 10px; background: #f3f6ef; border-radius: 8px; font-size: .9rem; }
+/* ---------- Documents ---------- */
+.listing-status { font-size: .85rem; font-weight: 600; padding: 6px 10px; border-radius: 6px; margin-bottom: 8px; }
+.listing-status.ok { background: #e6f2e4; color: var(--green-dark); }
+.listing-status.todo { background: #fff4e5; color: #8a4b00; }
+.doc { display: flex; gap: 8px; align-items: flex-start; padding: 8px 0; border-top: 1px dashed var(--border); font-size: .88rem; }
+.doc:first-of-type { border-top: 0; }
+.doc-icon { width: 22px; height: 22px; flex-shrink: 0; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-size: .8rem; font-weight: 700; background: #e6e9e1; color: var(--muted); }
+.doc.verified .doc-icon { background: var(--green); color: #fff; }
+.doc.rejected .doc-icon { background: var(--red); color: #fff; }
+.doc.checking .doc-icon { background: var(--orange); color: #fff; animation: pulse 1.2s infinite; }
+.doc-body { flex: 1; min-width: 0; }
+.doc .hint { margin: 2px 0 0; }
+.issues { margin: 4px 0 0; padding-left: 18px; color: var(--red); font-size: .82rem; }
+.doc-actions { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+.doc-actions .btn { margin: 0; padding: 4px 10px; font-size: .8rem; font-weight: 600; }
+.btn.disabled { opacity: .5; pointer-events: none; }
+.angles-head .count.short { color: #8a4b00; }
+.doc.pending .doc-icon { background: #fff4e5; color: #8a4b00; }
+/* ---------- Papers in the form, and the checks after posting ---------- */
+.papers { margin-top: 0; }
+.paper { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px dashed var(--border); font-size: .88rem; }
+.paper .hint { margin: 2px 0 0; overflow-wrap: anywhere; }
+.paper .doc-actions { flex-direction: row; }
+.req { color: var(--red); font-weight: 700; }
+.overlay { position: fixed; inset: 0; z-index: 20; background: rgba(0, 0, 0, .5); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.check-card { width: 100%; max-width: 440px; max-height: 90vh; overflow-y: auto; }
+.steps { list-style: none; padding: 0; margin: 0 0 16px; }
+.step { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; color: var(--muted); }
+.step.active, .step.done, .step.failed { color: var(--text); }
+.step.active { font-weight: 600; }
+.step .hint { font-weight: 400; margin: 2px 0 0; }
+.step-icon { width: 24px; height: 24px; flex-shrink: 0; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-size: .8rem; font-weight: 700; border: 2px solid var(--border); }
+.step.done .step-icon { background: var(--green); border-color: var(--green); color: #fff; }
+.step.failed .step-icon { background: var(--red); border-color: var(--red); color: #fff; }
+.step.active .step-icon { border-color: transparent; }
+.spinner { width: 20px; height: 20px; border-radius: 50%; border: 3px solid #dfe5d8; border-top-color: var(--green); animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.check-card .issues { margin: 0 0 14px; }

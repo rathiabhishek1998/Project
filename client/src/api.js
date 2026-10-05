@@ -14,11 +14,22 @@ export const postJson = (path, body) =>
 
 export const rupees = (n) => (n == null ? 'Price not given' : `₹${Number(n).toLocaleString('en-IN')}`);
 
-// Angles a customer can photograph, in display order (must match PHOTO_ANGLES in src/app.js).
+// Angles a customer can photograph, in display order (must match PHOTO_LABELS in src/verify.js).
 export const PHOTO_ANGLES = {
   front: 'Front', rear: 'Back', left: 'Left side', right: 'Right side',
   engine: 'Engine', dashboard: 'Dashboard & seat', tyres: 'Tyres', other: 'Other',
 };
+// A listing needs at least this many photos (must match MIN_PHOTOS in src/verify.js).
+export const MIN_PHOTOS = 4;
+
+// The papers a listing needs (must match DOC_TYPES in src/verify.js). The loan NOC is needed only when the RC shows a loan.
+export const DOC_TYPES = {
+  rc: { label: 'RC book', required: true, hint: 'Registration certificate / smart card, front and back in one photo or PDF' },
+  insurance: { label: 'Insurance', required: true, hint: 'Current insurance policy or certificate' },
+  owner_id: { label: 'Owner ID proof', required: true, hint: 'Aadhaar, PAN, voter ID or driving licence of the RC owner. Only the last 4 digits are kept' },
+  loan_noc: { label: 'Loan NOC', required: false, hint: 'Only if the tractor was bought on a loan: the bank’s no-objection certificate' },
+};
+
 // Photos posted before angles existed have none.
 export const angleLabel = (angle) => PHOTO_ANGLES[angle] ?? 'Photo';
 

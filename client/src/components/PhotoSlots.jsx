@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { PHOTO_ANGLES } from '../api.js';
+import { MIN_PHOTOS, PHOTO_ANGLES } from '../api.js';
 
 const CameraIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -31,10 +31,12 @@ export default function PhotoSlots({ files, existing, onPick, onRemove, onRemove
     <div className="photo-section">
       <div className="angles-head">
         <strong>📸 Photos from every angle</strong>
-        <span className="count">{filled === angles.length ? '✓ All angles added' : `${filled} of ${angles.length} angles`}</span>
+        <span className={`count${filled < MIN_PHOTOS ? ' short' : ''}`}>
+          {filled === angles.length ? '✓ All angles added' : filled < MIN_PHOTOS ? `${filled} of ${MIN_PHOTOS} needed` : `${filled} of ${angles.length} angles`}
+        </span>
       </div>
       <div className="progress"><div style={{ width: `${(filled / angles.length) * 100}%` }} /></div>
-      <p className="muted hint">Tap a box to take or choose a photo. More angles help brokers trust your tractor.</p>
+      <p className="muted hint">Tap a box to take or choose a photo. Add at least {MIN_PHOTOS}; more angles help brokers trust your tractor.</p>
 
       <div className="slots">
         {angles.map((angle, i) => {

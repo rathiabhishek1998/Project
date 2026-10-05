@@ -1,6 +1,7 @@
 // Builds the app from environment variables. Used by `npm start` (src/index.js) and by Vercel (api/index.js).
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createAi } from './ai.js';
 import { createApp } from './app.js';
 import { createDb } from './db.js';
 import { blobStorage, diskStorage } from './storage.js';
@@ -31,5 +32,8 @@ export async function buildApp(env = process.env) {
   const storage = useBlob ? blobStorage() : diskStorage(env.UPLOAD_DIR ?? path.join(root, 'uploads'));
   const config = { jwtSecret: env.JWT_SECRET ?? 'dev-only-secret', secureCookies: production };
 
-  return createApp({ db, config, storage });
+  // Without these keys the site still works; the assistant and document checks say they are not set up.
+  const ai = createAi({ anthropicKey: env.ANTHROPIC_API_KEY, voyageKey: env.VOYAGE_API_KEY });
+
+  return createApp({ db, config, storage, ai });
 }

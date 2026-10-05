@@ -12,6 +12,7 @@ export function diskStorage(dir) {
   const file = (name) => path.join(dir, path.basename(name));
   return {
     save: (name, buffer) => fs.promises.writeFile(file(name), buffer),
+    read: (name) => fs.promises.readFile(file(name)),
     remove: async (names) => {
       for (const name of names) await fs.promises.rm(file(name), { force: true });
     },
@@ -26,6 +27,11 @@ export function blobStorage() {
   const key = (name) => `photos/${path.basename(name)}`;
   return {
     save: (name, buffer, contentType) => put(key(name), buffer, { access, contentType, addRandomSuffix: false }),
+    read: async (name) => {
+      const photo = await get(key(name), { access });
+      if (!photo) throw new Error(`Photo not found: ${name}`);
+      return Buffer.from(await new Response(photo.stream).arrayBuffer());
+    },
     remove: async (names) => {
       if (names.length) await del(names.map(key));
     },

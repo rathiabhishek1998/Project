@@ -3,8 +3,9 @@ import { angleLabel, postedDate, rupees } from '../api.js';
 /**
  * One tractor post. showContact adds the customer's name and phone (broker view);
  * onEdit / onDelete add the owner's buttons (customer view). onZoom(src, caption) opens a photo.
+ * children are shown at the bottom of the card (documents, questions).
  */
-export default function TractorCard({ tractor: t, showContact = false, onEdit, onDelete, onZoom }) {
+export default function TractorCard({ tractor: t, showContact = false, onEdit, onDelete, onZoom, children }) {
   const [cover, ...rest] = t.photos;
   const n = t.photos.length;
   return (
@@ -51,6 +52,7 @@ export default function TractorCard({ tractor: t, showContact = false, onEdit, o
             <button className="btn btn-danger" onClick={() => onDelete(t)}>Delete post</button>
           </div>
         )}
+        {children}
         <div className="muted small posted">Posted {postedDate(t.createdAt)}</div>
       </div>
     </div>

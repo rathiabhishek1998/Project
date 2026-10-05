@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { useRequireLogin } from '../auth.js';
+import AskDocuments from '../components/AskDocuments.jsx';
 import Header from '../components/Header.jsx';
 import { useLightbox } from '../components/Lightbox.jsx';
 import TractorCard from '../components/TractorCard.jsx';
@@ -39,7 +40,7 @@ export default function Broker() {
       <main className="wrap">
         <div className="toolbar">
           <div>
-            <h2 className="flush">Tractors posted by customers</h2>
+            <h2 className="flush">Tractors with verified papers</h2>
             {tractors && <span className="muted">{tractors.length} tractor{tractors.length === 1 ? '' : 's'}</span>}
           </div>
           <input type="search" placeholder="Search brand, model or location…" value={query} onChange={(e) => setQuery(e.target.value)} />
@@ -47,7 +48,11 @@ export default function Broker() {
         <div className="error">{error}</div>
         <div className="grid">
           {tractors?.length === 0 && <p className="muted">No tractors found.</p>}
-          {tractors?.map((t) => <TractorCard key={t.id} tractor={t} showContact onZoom={zoom} />)}
+          {tractors?.map((t) => (
+            <TractorCard key={t.id} tractor={t} showContact onZoom={zoom}>
+              <AskDocuments tractorId={t.id} />
+            </TractorCard>
+          ))}
         </div>
       </main>
       {lightbox}
